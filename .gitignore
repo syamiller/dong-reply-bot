@@ -140,3 +140,5 @@ virt
 __pycache__/*
 archive.zip
 requirements.txt
+
+virt
