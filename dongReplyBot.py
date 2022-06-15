@@ -1,3 +1,4 @@
+from audioop import avg
 import tweepy
 import logging
 import pymysql
@@ -13,17 +14,12 @@ access_secret = config.token_secret
 auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
 auth.set_access_token(access_token, access_secret)
 api = tweepy.API(auth)
-client = tweepy.Client(bearer_token= config.bearer_token)
 
-#connect to db
-conn = pymysql.connect(
-        host= config.host, 
-        port = config.port,
-        user = config.user, 
-        password = config.password,
-        db = config.db,
-        )
-cur = conn.cursor()
+
+
+client = tweepy.Client(access_token=config.access_token, access_token_secret=config.token_secret, consumer_key=config.api_key, consumer_secret=config.api_secret)
+
+
 
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
@@ -74,7 +70,14 @@ def put_last_tweet(file, Id):
 
 #here we go...
 def respond_to_tweet(file="id.txt"):
-
+    conn = pymysql.connect(
+        host= config.host, 
+        port = config.port,
+        user = config.user, 
+        password = config.password,
+        db = config.db,
+        )
+    cur = conn.cursor()
     #grab last tweet replied to
     last_id = get_last_tweet(file)
     tweets = api.user_timeline(user_id='1392540526465806338', since_id=last_id, count = 200, tweet_mode='extended', include_rts=False)
@@ -105,61 +108,40 @@ def respond_to_tweet(file="id.txt"):
         ang = float(text.split('launch angle:')[1].split()[0].strip())
         dist = float(text.split('proj. distance:')[1].split()[0].strip())
 
+        print(name)
+
         logger.info("Liking tweet...")
-        #api.create_favorite(tweet.id)
+        # api.create_favorite(tweet.id)
 
         #check if HR emoji in tweet
         if '\U0001f4a3' in text:
-            cur.execute('SELECT count, avg_park, avg_velo, avg_angle, avg_dist FROM HRTracker WHERE name = %s', (name,))
-            tup=cur.fetchone()
+            avg_hr_inc = 0
 
-            #a bunch of different condition...
-            if tup is None:
-                hr=1
-                hr_avg=int(text.split('/')[0].split()[-1])
-                cur.execute('''INSERT IGNORE INTO HRTracker (name, count, avg_park,avg_velo,avg_angle,avg_dist) 
-                            VALUES (%s,%s,%s,%s,%s,%s)''',
-                            (name, hr, hr_avg, velo, ang, dist))
-                tweet='''@would_it_dong That's the FIRST {}Home Run{} of the Season for {} #{}
-
-Automated Reply from @SyMill_Baseball'''.format(emoji, emoji, name, hashtag)
-
-            elif tup[0] == 0:
-                hr=1
-                hr_avg=int(text.split('/')[0].split()[-1])
-                cur.execute('''UPDATE HRTracker 
-                            SET count = %s, avg_park = %s, avg_velo=%s,avg_angle=%s,avg_dist=%s 
-                            WHERE name = %s''', 
-                            (hr, hr_avg, velo, ang, dist, name))
-                tweet='''@would_it_dong That's the FIRST {}Home Run{} of the Season for {} #{}
-
-Automated Reply from @SyMill_Baseball'''.format(emoji, emoji, name, hashtag)
-
-            #alculate averages and update
+            if '\U0001f984' in text:
+                avg_hr_inc = 1
+                emoji = "\U0001f984"
+            elif '\U0001f512' in text:
+                avg_hr_inc = 30
+                emoji = "\U0001f512"
             else:
+                avg_hr_inc = int(text.split('/')[0].split()[-1])
+                emoji = "\U0001f4a3"
+
+            try:
+                cur.execute('SELECT count, avg_park, avg_velo, avg_angle, avg_dist FROM HRTracker WHERE name = %s', (name,))
+                tup=cur.fetchone()
+
                 hr=tup[0]
-                hr_avg=tup[1]
+                hr_avg= (tup[1]*hr+avg_hr_inc)/(hr+1)
                 avg_velo=(tup[2]*hr+velo)/(hr+1)
                 avg_ang=(tup[3]*hr+ang)/(hr+1)
                 avg_dist=(tup[4]*hr+dist)/(hr+1)
-                if '\U0001f984' in text:
-                    hr += 1
-                    hr_avg = (hr_avg*(hr-1) + 1) / hr
-                    emoji = "\U0001f984"
-                elif '\U0001f512' in text:
-                    hr +=1
-                    hr_avg = (hr_avg*(hr-1)+30)/hr
-                    emoji = "\U0001f512"
-                else:
-                    park = int(text.split('/')[0].split()[-1])
-                    hr += 1
-                    hr_avg = (hr_avg*(hr-1)+park)/hr
-                    emoji = "\U0001f4a3"
+
                 cur.execute('''UPDATE HRTracker 
                             SET count = %s, avg_park = %s, avg_velo=%s,avg_angle=%s,avg_dist=%s 
                             WHERE name = %s''', 
                             (hr, hr_avg, avg_velo, avg_ang, avg_dist, name))
-                tweet = '''@would_it_dong {} HR on the season for {} #{}
+                tweet = '''{} HR on the season for {} #{}
 
 Each Home Run for {} has...
 AVG Exit Velo: {} mph
@@ -169,41 +151,62 @@ Would dong in {}/30 MLB ballparks
 
 Automated Reply from @SyMill_Baseball'''.format(str(hr), name, hashtag, name, str(round(avg_velo, 2)), str(round(avg_ang, 2)), str(round(avg_dist, 2)), str(round(hr_avg, 2)))
 
+            except:
+                hr=1
+                hr_avg= avg_hr_inc
+                cur.execute('''INSERT IGNORE INTO HRTracker (name, count, avg_park,avg_velo,avg_angle,avg_dist) 
+                            VALUES (%s,%s,%s,%s,%s,%s)''',
+                            (name, hr, hr_avg, velo, ang, dist))
+                tweet='''That's the FIRST {}Home Run{} of the Season for {} #{}
+
+Automated Reply from @SyMill_Baseball'''.format(emoji, emoji, name, hashtag)
+
         #otherwise...
         else:
-            cur.execute('SELECT count, avg_park, avg_velo, avg_angle, avg_dist FROM NoHRTracker WHERE name = %s', (name,))
-            tup=cur.fetchone()
-            if tup is None:
-                no_hr=1
-                no_hr_avg=hr_avg=int(text.split('/')[0].split()[-1])
-                cur.execute('''INSERT IGNORE INTO NoHRTracker (name, count, avg_park,avg_velo,avg_angle,avg_dist) 
-                            VALUES (%s,%s,%s,%s,%s,%s)''',
-                            (name, no_hr, no_hr_avg, velo, ang, dist))
-            
-            #calculate avergaes and update db
+            avg_hr_inc = 0
+            if '\U0001f984' in text:
+                avg_hr_inc = 29
+            elif 'nowhere else' in text:
+                avg_hr_inc = 1
             else:
+                avg_hr_inc = int(text.split('/')[0].split()[-1])
+            
+            #if in db
+            try:
+                #get current stats from db
+                cur.execute('SELECT count, avg_park, avg_velo, avg_angle, avg_dist FROM NoHRTracker WHERE name = %s', (name,))
+                tup=cur.fetchone()
+
+                #calculate averages
                 no_hr=tup[0]
-                no_hr_avg=tup[1]
+                no_hr_avg= (tup[1] * no_hr + avg_hr_inc) / (no_hr+1) 
                 avg_velo=(tup[2]*no_hr+velo)/(no_hr+1)
                 avg_ang=(tup[3]*no_hr+ang)/(no_hr+1)
                 avg_dist=(tup[4]*no_hr+dist)/(no_hr+1)
-                if '\U0001f984' in text:
-                    no_hr+=1
-                    no_hr_avg=(no_hr_avg*(no_hr-1)+29)/no_hr
-                    emoji='\U0001f984'
-                elif 'nowhere else' in text:
-                    no_hr+=1
-                    no_hr_avg=(no_hr_avg*(no_hr-1)+1)/no_hr
-                    emoji=text.split('\\')
-                else:
-                    num = int(text.split('/')[0].split()[-1])
-                    no_hr+=1
-                    no_hr_avg=(no_hr_avg*(no_hr-1)+num)/no_hr
+                no_hr += 1
+
+                #update table
                 cur.execute('''UPDATE NoHRTracker 
                             SET count = %s, avg_park = %s, avg_velo=%s,avg_angle=%s,avg_dist=%s 
                             WHERE name = %s''', 
                             (no_hr, no_hr_avg, avg_velo, avg_ang, avg_dist, name))
-            tweet = '''@would_it_dong {} missed dongs on the season for {} #{}
+
+
+            #if not in db
+            except:
+                no_hr=1
+                no_hr_avg = avg_hr_inc
+                avg_velo = velo
+                avg_ang = ang
+                avg_dist = dist
+
+                #insert into tracker
+                cur.execute('''INSERT IGNORE INTO NoHRTracker (name, count, avg_park,avg_velo,avg_angle,avg_dist) 
+                            VALUES (%s,%s,%s,%s,%s,%s)''',
+                            (name, no_hr, no_hr_avg, avg_velo, avg_ang, avg_dist))
+
+            #format tweet!
+            tweet = '''{} missed dongs on the season for {} #{}
 
 Each Non HR for {} has...
 AVG Exit Velo: {} mph
@@ -215,15 +218,17 @@ Automated Reply from @SyMill_Baseball'''.format(str(no_hr), name, hashtag, name,
  
         #finally tweet!
         logger.info("Tweeting!")
-        api.update_status(status=tweet, in_reply_to_status_id=new_id)
+        client.create_tweet(text=tweet, user_auth=True, quote_tweet_id=new_id)
 
         #update last tweet
         put_last_tweet(file, new_id)
 
         #commit changes and wait to tweet again (<3 rate limits)
         conn.commit()
-        time.sleep(10)
-
+        time.sleep(12)
+        logger.info('Sleeping...')
+        
+    conn.close()
 
 
 
@@ -233,4 +238,3 @@ Automated Reply from @SyMill_Baseball'''.format(str(no_hr), name, hashtag, name,
 
 if __name__=="__main__":
     respond_to_tweet()
-    cur.close()
